@@ -3,6 +3,8 @@
 
 import asyncio
 import sys
+
+import aiohttp
 import hashlib
 import time
 import re
