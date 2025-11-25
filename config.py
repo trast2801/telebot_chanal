@@ -42,6 +42,8 @@ BLACKLIST_KEYWORDS = [
     '#ии',
     '#BTC',
     '#китай',
+    '#европа',
+    'кэшбэк',
 ]
 
 LOG_FILE = 'telegram_bot.log'  # Имя файла для логов

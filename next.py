@@ -1,5 +1,6 @@
 # telegram_bot.py
 # эта версия с проверкой на дубликаты с вероятностью 80% и проверкой черного списка
+# и замером времени задержки
 
 import asyncio
 import sys
@@ -173,6 +174,51 @@ class MessageFilter:
             return keyword.lower() in text.lower()
 
 
+class DelayTracker:
+    """Класс для отслеживания задержек между получением и отправкой сообщений"""
+
+    def __init__(self):
+        self.message_timestamps = {}  # Хранит время получения сообщений по ID
+        self.delays = []  # Статистика задержек
+        self.total_messages = 0
+        self.total_delay = 0.0
+
+    def start_tracking(self, message_id):
+        """Начинает отслеживание сообщения"""
+        self.message_timestamps[message_id] = time.time()
+
+    def stop_tracking(self, message_id):
+        """Завершает отслеживание и возвращает задержку"""
+        if message_id not in self.message_timestamps:
+            return None
+
+        start_time = self.message_timestamps.pop(message_id)
+        end_time = time.time()
+        delay = end_time - start_time
+
+        # Обновляем статистику
+        self.delays.append(delay)
+        self.total_messages += 1
+        self.total_delay += delay
+
+        return delay
+
+    def get_statistics(self):
+        """Возвращает статистику задержек"""
+        if not self.delays:
+            return "Нет данных о задержках"
+
+        avg_delay = self.total_delay / self.total_messages
+        max_delay = max(self.delays)
+        min_delay = min(self.delays)
+
+        return (f"Статистика задержек: "
+                f"сообщений={self.total_messages}, "
+                f"средняя={avg_delay:.3f}с, "
+                f"мин={min_delay:.3f}с, "
+                f"макс={max_delay:.3f}с")
+
+
 def truncate_text(text, max_length=1024):
     """Обрезает текст до максимальной длины"""
     if not text:
@@ -192,7 +238,7 @@ def escape_markdown(text):
     return text
 
 
-async def send_media_with_fallback(client, target_chat, message, source_name):
+async def send_media_with_fallback(client, target_chat, message, source_name, delay_tracker, message_id):
     """Отправка медиа с обработкой различных типов медиа"""
     try:
         original_text = message.text or message.caption or ""
@@ -200,6 +246,7 @@ async def send_media_with_fallback(client, target_chat, message, source_name):
         escaped_source = escape_markdown(source_name)
 
         caption_text = f"**📢 Источник:** {escaped_source}\n\n{escaped_text}"
+
         caption_text = truncate_text(caption_text, 1024)
 
         # Проверяем тип медиа
@@ -247,6 +294,12 @@ async def send_media_with_fallback(client, target_chat, message, source_name):
         else:
             print(f"❌ Другая ошибка при отправке медиа: {e}")
             return False
+    finally:
+        # Фиксируем время окончания отправки
+        if message_id:
+            delay = delay_tracker.stop_tracking(message_id)
+            if delay is not None:
+                print(f"⏱️ Задержка отправки медиа: {delay:.3f} секунд")
 
 
 async def main():
@@ -291,6 +344,9 @@ async def main():
         # Инициализация фильтра сообщений
         message_filter = MessageFilter()
 
+        # Инициализация трекера задержек
+        delay_tracker = DelayTracker()
+
         client = TelegramClient(
             session='session_name',
             api_id=api_id,
@@ -303,10 +359,14 @@ async def main():
         logger.info(f"🚫 Паттернов в черном списке: {len(message_filter.blacklist_patterns)}")
         logger.info(f"🚫 Ключевых слов в черном списке: {len(message_filter.blacklist_keywords)}")
         logger.info(f"📝 Логирование в файл: {log_file}")
+        logger.info("⏱️ Включен замер задержек между получением и отправкой сообщений")
         logger.info("⏹️  Для остановки нажмите Ctrl+C")
 
         @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
         async def copy_message(event):
+            message_id = f"{event.chat_id}_{event.message.id}"
+            delay_tracker.start_tracking(message_id)
+
             try:
                 source_entity = await event.get_chat()
                 source_name = source_entity.title
@@ -321,6 +381,7 @@ async def main():
                         original_text) > 50 else original_text or "[медиа]"
                     logger.warning(
                         f"Сообщение отфильтровано из '{source_name}' (причина: {filter_reason}): {preview_text}")
+                    delay_tracker.stop_tracking(message_id)
                     return
 
                 # Проверяем на схожесть с предыдущими сообщениями
@@ -332,13 +393,15 @@ async def main():
                     preview_normalized = normalized[:80] + "..." if normalized and len(normalized) > 80 else normalized
 
                     logger.warning(f"Дубликат из '{source_name}' (схожесть: {similarity:.1%}): {preview_normalized}")
+                    delay_tracker.stop_tracking(message_id)
                     return
 
                 # Обработка сообщений с медиа
                 if event.message.media:
                     # Определяем тип медиа для логирования
                     media_type = type(event.message.media).__name__
-                    success = await send_media_with_fallback(client, TARGET_CHAT, event.message, source_name)
+                    success = await send_media_with_fallback(client, TARGET_CHAT, event.message, source_name,
+                                                             delay_tracker, message_id)
                     if success:
                         preview_text = original_text[:50] + "..." if original_text and len(
                             original_text) > 50 else original_text or f"[{media_type}]"
@@ -365,20 +428,41 @@ async def main():
                         original_text) > 50 else original_text
                     logger.info(f"Сообщение из '{source_name}': {preview_text}")
 
+                    # Фиксируем время окончания отправки для текстовых сообщений
+                    delay = delay_tracker.stop_tracking(message_id)
+                    if delay is not None:
+                        logger.info(f"⏱️ Задержка отправки: {delay:.3f} секунд")
+
             except Exception as e:
                 logger.error(f"Ошибка при копировании из '{source_name}': {e}")
+                delay_tracker.stop_tracking(message_id)
 
         try:
             await client.start()
             logger.info("✅ Бот успешно авторизован и запущен")
             logger.info("🔄 Ожидание сообщений...")
 
+            # Периодический вывод статистики
+            async def print_statistics():
+                while True:
+                    await asyncio.sleep(300)  # Каждые 5 минут
+                    stats = delay_tracker.get_statistics()
+                    logger.info(f"📊 {stats}")
+
+            # Запускаем задачу для вывода статистики
+            asyncio.create_task(print_statistics())
+
             await client.run_until_disconnected()
 
         except KeyboardInterrupt:
             logger.info("🛑 Остановка бота по запросу пользователя")
+            # Выводим финальную статистику
+            stats = delay_tracker.get_statistics()
+            logger.info(f"📊 Финальная статистика: {stats}")
         except Exception as e:
             logger.error(f"Критическая ошибка: {e}")
+            stats = delay_tracker.get_statistics()
+            logger.info(f"📊 Статистика на момент ошибки: {stats}")
         finally:
             await client.disconnect()
             logger.info("👋 Бот остановлен")
