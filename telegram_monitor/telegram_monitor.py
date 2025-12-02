@@ -241,11 +241,18 @@ class TelegramMonitor:
             ))
             return
         
+        # Конвертируем время сообщения в локальное время без часового пояса
+        message_time = message.date
+        if message_time.tzinfo is not None:
+            message_time = message_time.astimezone().replace(tzinfo=None)
+        else:
+            message_time = message_time.replace(tzinfo=None)
+        
         # Создаем объект сообщения
         message_data = MessageData(
             message_id=message.id,
             text=message.text or "",
-            timestamp=message.date.replace(tzinfo=None),
+            timestamp=message_time,
             original_message=message,
             source_channel_id=chat_id
         )
@@ -260,7 +267,7 @@ class TelegramMonitor:
             self.stats["unique_forwarded"] += 1
             
             # Выводим информацию о задержке перепоста
-            if message_data.forward_delay:
+            if message_data.forward_delay is not None:
                 delay_str = self.formatter.format_delay(message_data.forward_delay)
                 
                 # Добавляем информацию об очистке
@@ -268,10 +275,22 @@ class TelegramMonitor:
                 if CLEAN_FORWARDED_TEXT and message_data.chars_removed > 0:
                     clean_info = f" | Удалено: {message_data.chars_removed} символов"
                 
-                logger.info(f"✅ УСПЕХ #{self.stats['unique_forwarded']} | "
-                           f"ID: {message.id} | "
-                           f"Задержка перепоста: {delay_str}"
-                           f"{clean_info}")
+                # Логируем с правильной задержкой
+                if message_data.forward_delay < 60:  # Меньше минуты
+                    logger.info(f"✅ УСПЕХ #{self.stats['unique_forwarded']} | "
+                               f"ID: {message.id} | "
+                               f"Задержка: {delay_str}"
+                               f"{clean_info}")
+                elif message_data.forward_delay < 300:  # Меньше 5 минут (но больше минуты)
+                    logger.warning(f"⚠️  МЕДЛЕННО #{self.stats['unique_forwarded']} | "
+                                 f"ID: {message.id} | "
+                                 f"Задержка: {delay_str}"
+                                 f"{clean_info}")
+                else:  # Больше 5 минут
+                    logger.error(f"❌ ОЧЕНЬ МЕДЛЕННО #{self.stats['unique_forwarded']} | "
+                               f"ID: {message.id} | "
+                               f"Задержка: {delay_str}"
+                               f"{clean_info}")
             
             # Обновляем статистику каждые 10 сообщений
             if self.stats["unique_forwarded"] % 10 == 0:
@@ -322,12 +341,19 @@ class TelegramMonitor:
             loaded_count = 0
             
             async for message in self.client.iter_messages(source_channel, limit=CHECK_HISTORY_LIMIT):
-                if message.date.replace(tzinfo=None) > time_threshold:
+                # Конвертируем время сообщения
+                message_time = message.date
+                if message_time.tzinfo is not None:
+                    message_time = message_time.astimezone().replace(tzinfo=None)
+                else:
+                    message_time = message_time.replace(tzinfo=None)
+                
+                if message_time > time_threshold:
                     if message.text or message.message:
                         msg_data = MessageData(
                             message_id=message.id,
                             text=message.text or "",
-                            timestamp=message.date.replace(tzinfo=None),
+                            timestamp=message_time,
                             original_message=message,
                             source_channel_id=channel_id
                         )

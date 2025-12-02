@@ -21,11 +21,11 @@ class MessageData:
             source_channel_id: ID канала-источника
         """
         self.id = message_id
-        self.original_text = text  # Сохраняем оригинальный текст
-        self.text = text  # Текст может быть очищен позже
+        self.original_text = text
+        self.text = text
         self.timestamp = timestamp
         self.original_message = original_message
-        self.source_channel_id = source_channel_id  # ID канала-источника
+        self.source_channel_id = source_channel_id
         self.forwarded_at: Optional[datetime] = None
         self.forward_delay: Optional[float] = None
         self.cleaned_text: Optional[str] = None
@@ -47,7 +47,18 @@ class MessageData:
     def mark_forwarded(self):
         """Отмечает время пересылки и вычисляет задержку."""
         self.forwarded_at = datetime.now()
-        self.forward_delay = (self.forwarded_at - self.timestamp).total_seconds()
+        
+        # Убедимся, что оба времени без часового пояса
+        if self.timestamp.tzinfo is not None:
+            local_timestamp = self.timestamp.astimezone().replace(tzinfo=None)
+        else:
+            local_timestamp = self.timestamp
+            
+        self.forward_delay = (self.forwarded_at - local_timestamp).total_seconds()
+        
+        # Если задержка отрицательная (проблема с временем), устанавливаем 0
+        if self.forward_delay < 0:
+            self.forward_delay = 0.0
     
     def get_forward_info(self) -> Dict[str, Any]:
         """Возвращает информацию о пересылке."""
