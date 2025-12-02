@@ -15,7 +15,7 @@ from telethon import TelegramClient, events
 from telethon.tl.types import Message
 
 from config.constants import (
-    API_ID, API_HASH, SOURCE_CHANNEL, TARGET_CHANNEL,
+    API_ID, API_HASH, SOURCE_CHANNELS, TARGET_CHANNEL,
     CACHE_HOURS, SIMILARITY_THRESHOLD, CACHE_MAX_SIZE,
     CHECK_HISTORY_LIMIT, FORWARD_DELAY_SECONDS,
     MAX_FORWARDED_HISTORY, LOG_FILE, LOG_LEVEL, LOG_FORMAT,
@@ -176,6 +176,7 @@ class TelegramMonitor:
         """Пересылает сообщение в целевой канал."""
         try:
             target_channel = await self.client.get_entity(TARGET_CHANNEL)
+            source_channel = await self.client.get_entity(message_data.source_channel_id)
             
             if CLEAN_FORWARDED_TEXT:
                 # Используем очищенную отправку
@@ -185,7 +186,7 @@ class TelegramMonitor:
                 await self.client.forward_messages(
                     target_channel,
                     messages=message_data.original_message,
-                    from_peer=SOURCE_CHANNEL
+                    from_peer=source_channel
                 )
                 success = True
             
@@ -220,6 +221,9 @@ class TelegramMonitor:
         message = event.message
         self.stats["total_received"] += 1
         
+        # Получаем ID канала-источника
+        chat_id = event.chat_id
+        
         # Очищаем старый кэш
         self._cleanup_cache()
         
@@ -242,7 +246,8 @@ class TelegramMonitor:
             message_id=message.id,
             text=message.text or "",
             timestamp=message.date.replace(tzinfo=None),
-            original_message=message
+            original_message=message,
+            source_channel_id=chat_id
         )
         
         # Добавляем в кэш
@@ -307,10 +312,10 @@ class TelegramMonitor:
         
         logger.info("=" * BORDER_WIDTH + "\n")
     
-    async def _load_initial_history(self):
+    async def _load_initial_history(self, channel_id):
         """Загружает историю сообщений за последний час при старте."""
         try:
-            source_channel = await self.client.get_entity(SOURCE_CHANNEL)
+            source_channel = await self.client.get_entity(channel_id)
             logger.info(f"Загрузка истории за последний час из: {source_channel.title}")
             
             time_threshold = datetime.now() - timedelta(hours=CACHE_HOURS)
@@ -323,7 +328,8 @@ class TelegramMonitor:
                             message_id=message.id,
                             text=message.text or "",
                             timestamp=message.date.replace(tzinfo=None),
-                            original_message=message
+                            original_message=message,
+                            source_channel_id=channel_id
                         )
                         self.message_cache.append(msg_data)
                         loaded_count += 1
@@ -351,7 +357,7 @@ class TelegramMonitor:
             f.write("-" * 40 + "\n")
             f.write(f"Время начала: {self.settings.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Время окончания: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Исходный канал: {SOURCE_CHANNEL}\n")
+            f.write(f"Исходные каналы: {SOURCE_CHANNELS}\n")
             f.write(f"Целевой канал: {TARGET_CHANNEL}\n")
             f.write(f"Глубина проверки: {CACHE_HOURS} час\n")
             f.write(f"Порог схожести: {SIMILARITY_THRESHOLD}\n")
@@ -422,8 +428,8 @@ class TelegramMonitor:
         """Запускает мониторинг в реальном времени."""
         self.client = TelegramClient(self.settings.session_name, API_ID, API_HASH)
         
-        # Регистрируем обработчик новых сообщений
-        @self.client.on(events.NewMessage(chats=SOURCE_CHANNEL))
+        # Регистрируем обработчик новых сообщений для всех каналов
+        @self.client.on(events.NewMessage(chats=SOURCE_CHANNELS))
         async def handler(event):
             await self._handle_new_message(event)
         
@@ -432,8 +438,9 @@ class TelegramMonitor:
             await self.client.start()
             logger.info(MESSAGES["connected"])
             
-            # Загружаем историю
-            await self._load_initial_history()
+            # Загружаем историю из всех каналов
+            for channel_id in SOURCE_CHANNELS:
+                await self._load_initial_history(channel_id)
             
             # Выводим информацию о запуске
             self._print_startup_info()
@@ -451,7 +458,7 @@ class TelegramMonitor:
         logger.info("\n" + "=" * BORDER_WIDTH)
         logger.info(MESSAGES["startup"])
         logger.info("=" * BORDER_WIDTH)
-        logger.info(f"Исходный канал: {SOURCE_CHANNEL}")
+        logger.info(f"Исходные каналы: {SOURCE_CHANNELS}")
         logger.info(f"Целевой канал: {TARGET_CHANNEL}")
         logger.info(f"Глубина проверки: {CACHE_HOURS} час")
         logger.info(f"Порог схожести: {SIMILARITY_THRESHOLD}")

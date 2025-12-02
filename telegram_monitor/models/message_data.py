@@ -9,7 +9,7 @@ from typing import Optional, Any, Dict, Tuple
 class MessageData:
     """Класс для хранения данных о сообщении."""
     
-    def __init__(self, message_id: int, text: str, timestamp: datetime, original_message: Any):
+    def __init__(self, message_id: int, text: str, timestamp: datetime, original_message: Any, source_channel_id: int):
         """
         Инициализирует объект сообщения.
         
@@ -18,12 +18,14 @@ class MessageData:
             text: Текст сообщения
             timestamp: Время отправки сообщения
             original_message: Оригинальный объект сообщения Telethon
+            source_channel_id: ID канала-источника
         """
         self.id = message_id
         self.original_text = text  # Сохраняем оригинальный текст
         self.text = text  # Текст может быть очищен позже
         self.timestamp = timestamp
         self.original_message = original_message
+        self.source_channel_id = source_channel_id  # ID канала-источника
         self.forwarded_at: Optional[datetime] = None
         self.forward_delay: Optional[float] = None
         self.cleaned_text: Optional[str] = None
@@ -54,6 +56,7 @@ class MessageData:
             "delay": self.forward_delay,
             "timestamp": self.timestamp,
             "forwarded_at": self.forwarded_at,
+            "source_channel_id": self.source_channel_id,
             "text_preview": self.text[:100] + "..." if len(self.text) > 100 else self.text,
             "cleaned": self.cleaned_text is not None,
             "chars_removed": self.chars_removed
@@ -61,4 +64,4 @@ class MessageData:
     
     def __repr__(self) -> str:
         """Строковое представление объекта."""
-        return f"MessageData(id={self.id}, timestamp={self.timestamp}, forwarded={self.forwarded_at is not None})"
+        return f"MessageData(id={self.id}, channel={self.source_channel_id}, timestamp={self.timestamp}, forwarded={self.forwarded_at is not None})"
